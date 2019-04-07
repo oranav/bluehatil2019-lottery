@@ -1,0 +1,285 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>BlueHat IL 2019 - Lottery solution</title>
+
+		<link rel="stylesheet" href="css/reset.css">
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/league.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/monokai.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+                <section data-markdown>
+                    <script type="text/template">
+                        BlueHat IL 2019 - &ldquo;Lottery&rdquo; solution
+
+                        ---
+
+                        Oran Avraham
+
+                        https://oranav.me
+
+                        April 2019
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ## Challenge details
+
+                        Physical lottery (6 numbers, each between 1 and 50*)
+
+                        Virtual interface for submitting guesses
+
+                        Each guess consumes a token
+                        
+                        You get two tokens when you enter the room
+
+                        Lottery happens every 30 minutes
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        Lottery is stateless.
+
+                        This means the server uses (almost) no storage.  In particular, it doesn't save the users' guesses.
+
+                        It has to use some mechanism to keep this secure.
+
+                        Solution: secert keys and MACs as signatures.
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Challenge flow (user guesses numbers)
+
+                        1. User guesses 6 numbers, uses a token and submits the guess (*sign*)
+                        2. User receives a signature blob and a MAC
+                        3. Optional step: one can verify the signature blob and MAC (*verify*)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Challenge flow (host draws numbers)
+
+                        1. Server disables guess signing
+                        2. Host draws 6 PHYSICAL numbered balls
+                        3. Admin enters the winning numbers into the system (*make_winnings_blob*)
+                        4. Admin receives a winning blob and a MAC
+                        5. Admin saves it into winning.blob
+                        6. Every user can now download winning.blob
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Challenge flow (lucky user wins!)
+
+                        1. User sends both *guess* and *winning* blob & MAC
+                        2. Server validates MACs
+                        3. Server validates guess numbers vs. winning numbers
+                        4. Server generates a certification blob & MAC (*certify*)
+                        5. User shows certification blob & MAC to Alon
+                        6. Alon verifies the certification blob & MAC (*verify-cert*)
+                        7. User receives a skydiving voucher :-)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Initial inspection
+
+                        No apparent simple vulnerabilities
+
+                        Checks look OK
+
+                        => We have to forge a certificate.
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Best practices for MACs
+
+                        Industry standard: HMAC with some good hash
+
+                        Lottery: custom made MAC with SHA1
+
+                        :D
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Lottery-MAC
+
+                        MAC(key, message) = SHA1(key || message)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Merkle–Damgård construction
+
+                        SHA1 uses a Merkle–Damgård construction
+
+                        * Message is split into blocks of 512 bits
+                        * Last block is padded (MD-complaint padding)
+                        * State is initialized to some magic values
+                        * First block is digested, state is transformed
+                        * Second block is digested, state is transformed again
+                        * ...
+                        * Last (padded) block is digested, state is finalized
+                        * Output is the state itself (as-is!)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ![Merkle-Damgard](https://upload.wikimedia.org/wikipedia/commons/thumb/e/ed/Merkle-Damgard_hash_big.svg/1200px-Merkle-Damgard_hash_big.svg.png)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Length extension attack
+
+                        Call the padding *PAD*
+
+                        MAC is SHA1(key || message)
+
+                        Without any* knowledge of the key, for every malicious text *TEXT*, we can easily compute
+
+                        SHA1(key || message || *PAD* || *TEXT*)
+
+                        \* We have to know the key length to compute *PAD*
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        How so?
+
+                        Remember that SHA1(key || message) is the internal state after digesting "key || message || *PAD*"
+
+                        Just initialize a SHA1 using the signature kindly provided by the server
+
+                        Now digest *TEXT*, then finalize (add a new padding)
+
+                        This is exactly what we wanted:
+
+                        SHA1(key || message || *PAD* || *TEXT*)
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### The lottery context
+
+                        We can do this after the numbers were drawn!
+
+                        We can append to a guess blob and get a new matching MAC
+
+                        But what does a guess blob looks like?
+                    </script>
+                </section>
+                <section data-markdown>
+                    <script type="text/template">
+                        ```
+                        guess=[1,2,3,4,5,6]&name=Oran&timestamp=1554667641
+                        ```
+
+                        forgive me for not encoding properly :-)
+                    </script>
+                </section>
+                <section data-markdown>
+                    <script type="text/template">
+                        What if we do something like
+                        ```
+                        guess=[1,2,3,4,5,6]&name=Oran&timestamp=1554667641PADPADPAD
+                        &guess=[1337,7331,3137,1733,3731,7313]&timestamp=1554667641
+                        ```
+                        ?
+
+                        It works!
+                    </script>
+                </section>
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Solution
+
+                        1. Sign whatever numbers (1 to 6 for example)
+                        2. Wait for lottery and observe winning numbers
+                        3. Server now disabled signing, but we don't need it
+                        4. Append the padding, new guess and timestamp
+                        5. Calculate the new MAC
+                        6. Certify and win!
+
+                        Right?
+                    </script>
+                </section>
+                <section data-markdown>
+                    <script type="text/template">
+                        In order to know what padding was used, we need the digest length
+
+                        Digest is key || message; we know the message length, but not key's length
+
+                        But that's easy: we have *verify*!
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ### Finding len(key)
+                        * Sign whatever numbers (1 to 6 for example)
+                        * For x=1...100, do:
+                            1. Calculate padding for len(key)=x
+                            2. Append "a" and calculate the new blob & MAC
+                            3. Use *verify* and see if server accepts
+                            4. If server accepted, x is the key length!
+
+                        Then we can just use our previous solution.
+                    </script>
+                </section>
+
+                <section data-markdown>
+                    <script type="text/template">
+                        ## Demo
+                    </script>
+                </section>
+			</div>
+		</div>
+
+		<script src="js/reveal.js"></script>
+
+		<script>
+			Reveal.initialize({
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true }
+				]
+			});
+		</script>
+	</body>
+</html>
